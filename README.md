@@ -29,16 +29,7 @@ Loader/
 
 ## 🔧 Loaders
 
-### 1. Basic Loader (`loader.c`)
-
-Hardcoded shellcode stored in `.data` section.
-
-**Compilation:**
-```bash
-x86_64-w64-mingw32-gcc loader.c -o loader.exe -s
-```
-
-### 2. Resource Loader (`loader_rsrc.c`)
+### 1. Resource Loader (`loader.c`)
 
 Shellcode stored in `.rsrc` section of the PE file.
 
@@ -48,7 +39,7 @@ Shellcode stored in `.rsrc` section of the PE file.
 x86_64-w64-mingw32-windres resource.rc -o resource.o
 
 # Step 2: Compile and link
-x86_64-w64-mingw32-gcc loader_rsrc.c resource.o -o loader_rsrc.exe -s
+x86_64-w64-mingw32-gcc loader.c resource.o -o loader.exe -s
 ```
 
 ---
