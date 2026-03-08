@@ -1,0 +1,22 @@
+; exports.def — Export definition for version.dll proxy
+; Ensures exported function names match exactly what the host app expects
+; (no @N decoration that stdcall can sometimes add with MinGW)
+LIBRARY version
+EXPORTS
+    GetFileVersionInfoA
+    GetFileVersionInfoW
+    GetFileVersionInfoExA
+    GetFileVersionInfoExW
+    GetFileVersionInfoSizeA
+    GetFileVersionInfoSizeW
+    GetFileVersionInfoSizeExA
+    GetFileVersionInfoSizeExW
+    GetFileVersionInfoByHandle
+    VerFindFileA
+    VerFindFileW
+    VerInstallFileA
+    VerInstallFileW
+    VerLanguageNameA
+    VerLanguageNameW
+    VerQueryValueA
+    VerQueryValueW

