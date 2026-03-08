@@ -205,7 +205,7 @@ The DLL module handle (`hinstDLL`) is passed to the thread so `FindResource` loa
 │    └── Cursor not moving? → exit                     │
 │ 2. FindResource(hSelf) → LoadResource → LockResource │  Load from THIS DLL
 │ 3. VirtualAlloc(PAGE_READWRITE)                      │  Allocate RW memory
-│ 4. RtlMoveMemory()                                  │  Copy encrypted shellcode
+│ 4. RtlMoveMemory()                                   │  Copy encrypted shellcode
 │ 5. AES_CBC_decrypt_buffer()                          │  Decrypt in memory
 │ 6. VirtualProtect(PAGE_EXECUTE_READ)                 │  Flip RW → RX
 │ 7. ((void(*)())exec_buf)()                           │  Execute shellcode directly
